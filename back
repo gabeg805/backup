@@ -297,12 +297,15 @@ function school_backup {
         rsync --delete -aAXvh --progress "${SCHOOL_DIR}"/* "${DROP_DIR}"
     fi
     
-    ## Start dropbox
+    ## Look for dropbox binary
     drop_prog=`hash dropbox 2>&1`
-    if [[ "${drop_prog}" == "" ]]; then
-        dropbox start -i
+    if [ ! -z "${drop_prog}" ]; then
+        echo "${PROG_NAME}: 'dropbox' program does not exist."
+        exit 1
     fi
     
+    ## Start dropbox
+    dropbox start -i
     exit 0
 }
 
