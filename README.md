@@ -2,7 +2,7 @@
 What is it?
 ===========
 
-Backup individual/multiple files or directories, or backup the whole system.
+Backup individual/multiple files and directories, or backup the whole system.
 
 
 
@@ -46,4 +46,4 @@ Potential Problems
 To-Do
 =====
 
-- TBD
+- Add a Dropbox Picture/Video backup option.
