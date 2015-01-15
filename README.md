@@ -10,7 +10,7 @@ Backup individual/multiple files or directories, or backup the whole system.
 Documentation
 =============
 
-Program documentation, such as usage, can be found in the header of the program.
+Program documentation can be found in the header of the program.
 
 
 
@@ -20,7 +20,7 @@ Installation
 
 Update your PATH environment variable in your shell rc file with:
     
-    $ export PATH="${PATH}":"/PATH/TO/SCRIPT/back
+    $ export PATH="${PATH}":"/PATH/TO/PROGRAM/back
 
 Now the program is ready for use!
 
