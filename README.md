@@ -38,7 +38,7 @@ If you have any problems, feel free to email me at 'gabeg@bu.edu'.
 Potential Problems
 ==================
 
-Unknown
+- TBD
 
 
 
@@ -46,4 +46,4 @@ Unknown
 To-Do
 =====
 
-N/A
+- TBD
