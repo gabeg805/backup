@@ -138,7 +138,7 @@ DST_PATH=""
 
 ## Displays the help screen
 function print_usage {
-    echo "Usage: back [-h] [--drop] [--full] [-f <files>] [-b <src> <dst>]"
+    echo "Usage: ${PROG_NAME} [-h] [--drop] [--full] [-f <files>] [-b <src> <dst>]"
     exit 1
 }
 
