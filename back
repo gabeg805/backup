@@ -1,492 +1,324 @@
 #!/bin/bash
-## 
-## CONTRIBUTORS: 
-## 
-##     * Gabriel Gonzalez (gabeg@bu.edu) 
-## 
-## 
-## LICENSE: 
-## 
-##     The MIT License (MIT)
-## 
-## 
-## NAME:
-## 	
-##     back - File/directory/system backup.
-## 
-## 
-## SYNTAX: 
-## 	
-##     back [-h|--help] [--full] [[-f|--files] <files>] [[-b|--backup] <src> <dst>]
-## 
-## 
-## PURPOSE:
-## 	
-##     A backup program that is capable of backing up files, directories, or the
-##     entire system.
-## 
-## 
-## OPTIONS:
-## 	
-##     -h, --help
-##         Print program usage.
-## 
-##     --full
-##         Full system backup.
-## 
-##     -f, --files <files>
-##         Back up the specified files.
-## 
-##     -b, --backup <src> <dst>
-##         Backup files from the given source to the specified destination directory.
-## 
-## 
-## FUNCTIONS:
-## 	
-##     print_usage       - Print program usage.
-##     print_backup_done - Print backup done message.
-## 
-##     root_check        - Check if user has root priveleges.
-##     path_check        - Prompts the user to make sure the given source and 
-##                         destination directories are correct.
-## 
-##     init_backup_paths - Initialize the backup source and destination paths.
-##     init_time         - Initialize the program start and end run times.
-##     init_full_backup  - Initialize the full system backup.
-## 
-##     get_exclude_dir   - Get directories to exclude.
-##     get_path          - Determine the full source and destination path.
-##     rsync_exclude     - Prompt the user for files/directories to exclude, and add 
-##                         them to the global exclude variable.
-##     rsync_options     - Define the parameter options for the rsync command.
-## 
-##     file_backup       - Back up an individual file, or multiple files.
-##     rsync_backup      - Backup the specified source item to the destination 
-##                         directory.
-## 
-## 
-## FILE STRUCTURE:
-##
-##     * Print Program Usage
-##     * Program Status Check
-##     * Process Initializations
-##     * Absolute Paths and Exclude Paths
-##     * Create Backups
-##     * Backup Files and Directories
-##   
-##   
-## MODIFICATION HISTORY:
-## 	
-##     gabeg Mar 31 2014 <> Created.
-## 
-##     gabeg Jun 30 2014 <> Combined the script that backs up files and the 
-##                          school directory, with the script that backs up the 
-##                          entire system.
-##     
-##     gabeg Aug 08 2014 <> Changed function and variable layout to be tighter.
-##
-##     gabeg Dec 31 2014 <> Removed "step_separator", "is_destination", and 
-##                          "is_path". Added "-b" option to specify that a backup 
-##                          with a source and destination directory was being 
-##                          executed. Changed "print_usage" to reflect this addition.
-##                          Made the program more verbose so that the user knows what
-##                          is going on. Updated "path_check" to better check if an
-##                          absolute path was specified.
-## 
-##     gabeg Apr 05 2015 <> Removed the dropbox school backup.
-##                          
-##                          Included more global variables to make the rsync command 
-##                          parameter options cleaner and easier to define.
-##                          
-##                          Cleaned up the code and updated the backup process by 
-##                          utlizing the global variables.
-## 
-## 
-## NOTICE: 
-## 
-##     I did not write the Dropbox program, thus I cannot take credit for writing any
-##     of that code. The Dropbox program might not use The MIT License (MIT), thus 
-##     this license  only applies to the lines of code that do not contain the  
-##     "dropbox" command.
-##
-## **********************************************************************************
+# ******************************************************************************
+# 
+# Name:    back
+# Author:  Gabriel Gonzalez
+# Email:   gabeg@bu.edu
+# License: The MIT License (MIT)
+# 
+# Syntax: back [options] [args]
+# 
+# Description: A file/directory/system backup program.
+# 
+# Notes: None.
+# 
+# ******************************************************************************
 
+# Globals
+PROG="${0##*/}"
 
+# Options
+VERBOSE=
 
-## ================
-## GLOBAL VARIABLES
-## ================
+# Source utility
+. ../lib/util.sh
 
-## Program information
-ARGV=("$@")
-PROG_NAME=`basename $0`
+# Exit statuses
+STATUS_NORMAL=0
+STATUS_GETOPT=1
+STATUS_ARGS=2
+STATUS_SRCDIR=10
+STATUS_DSTDIR=11
+STATUS_ROOT=100
 
-## Times
-START_TIME=0
-END_TIME=0
+# ******************************************************************************
+# Main
+main() {
+    [ $# -eq 0 ] && usage && exit ${STATUS_NORMAL}
 
-## Dates
-START_DATE=""
-END_DATE=""
+    short="hvf:b:d:e:"
+    long="help,verbose,files:,backup:,full-backup:,destination:,rsync-exclude:"
+    args=$(getopt -o "${short}" --long "${long}" --name "${PROG}" -- "${@}")
 
-## Paths
-SRC_PATH=""
-DST_PATH=""
+    [ $? -ne 0 ] && usage && exit ${STATUS_GETOPT}
+    eval set -- "${args}"
 
-## Log files
-BACKUP_LOG=""
+    # Options
+    local FILES=
+    local BACKUP=
+    local FULLBACKUP=
+    local SOURCE=
+    local DESTINATION=
+    local EXCLUDE=
 
-## Default rsync options
-EXCLUDE=()
-OPTIONS=(--delete -aAXvh --progress)
-
-
-
-## ###############################
-## ##### PRINT PROGRAM USAGE #####
-## ###############################
-
-## Displays the help screen
-function print_usage {
-    echo "Usage: ${PROG_NAME} back [-h|--help] [--full] [[-f|--files] <files>] [[-b|--backup] <src> <dst>]"
-    exit 1
-}
-
-
-
-## Print backup done message
-function print_backup_done {
-    
-    ## Append message to log file
-    min=$[ (${END_TIME} - ${START_TIME}) / 60 ]
-    sec=$[ (${END_TIME} - ${START_TIME}) % 60 ]
-    
-    printf "\n%s\n%s\n%s\n%-10s %s\n%-10s %s\n%-10s %s %s\n" \
-           "==============" \
-           "Backup Results" \
-           "==============" \
-           "Start:" "${START_DATE}" \
-           "End:" "${END_DATE}" \
-           "Total:" "${min} minutes," "${sec} seconds" 
-}
-
-
-
-## ################################
-## ##### PROGRAM STATUS CHECK #####
-## ################################
-
-## Check if full system backup is set and user is root
-function root_check {
-    echo ":: Checking root priveleges..."
-    
-    if [ ${UID} -ne 0 ]; then
-        echo "${PROG_NAME}: Must be root to run full system backup."
-        exit 1
-    fi
-}
-
-
-
-## Check if file paths are valid
-function path_check {
-    
-    ## Verify paths
-    if [ -e "${SRC_PATH}" ] && [ -e "${DST_PATH}" ]; then
-        printf "\n%s\n\t%-12s %s\n\t%s %s\n\n%s\n" \
-               "Using the following directories:" \
-               "Source:"  "'${SRC_PATH}'" \
-               "Destination:" "'${DST_PATH}'" \
-               "Continue?"
-        
-        local ans
-        read -p "> " ans
-        
-        ## Check answer
-        case "${ans}" in 
-            ""|y|Y) ;;
-            *) 
-                echo ":: Exiting..."
+    # Parse options
+    while true; do
+        case "${1}" in
+            # Print usage
+            -h|--help)
+                usage
                 exit 0
                 ;;
+
+            # Verbose
+            -v|--verbose)
+                VERBOSE=true
+                ;;
+
+            # Backup files
+            -f|--files)
+                shift
+                if [ -n "${BACKUP}" -o -n "${FULLBACKUP}" ]; then
+                    print_err "Unable to backup files: Multiple options specified."
+                    exit ${STATUS_ARGS}
+                fi
+                FILES=("${@}")
+                ;;
+
+            # Backup directory(ies)
+            -b|--backup)
+                shift
+                if [ -n "${FILES}" -o -n "${FULLBACKUP}" ]; then
+                    print_err "Unable to backup files: Multiple options specified."
+                    exit ${STATUS_ARGS}
+                fi
+                BACKUP=true
+                SOURCE="${1}"
+                ;;
+
+            # Full backup
+            --full-backup)
+                shift
+                if [ -n "${FILES}" -o -n "${BACKUP}" ]; then
+                    print_err "Unable to backup files: Multiple options specified."
+                    exit ${STATUS_ARGS}
+                fi
+                FULLBACKUP=true
+                DESTINATION="${1}"
+                ;;
+
+            # Destination location
+            -d|--destination)
+                shift
+                DESTINATION="${1}"
+                ;;
+
+            # Exclude directories for rsync
+            -e|--rsync-exclude)
+                shift
+                EXCLUDE="${1}"
+                ;;
+
+            # End of options
+            --) 
+                break
+                ;;
         esac
-    else
-        echo -e "${PROG_NAME}: Incorrect file paths given." \
-              "\n\tSource:      '${SRC_PATH}'" \
-              "\n\tDestination: '${DST_PATH}'"
-        exit 1
-    fi
-}
-
-
-
-## ###################################
-## ##### PROCESS INITIALIZATIONS #####
-## ###################################
-
-## Initialize the backup source and destination paths
-function init_backup_paths {
-    
-    ## Full path of location to copy and save to 
-    echo ":: Determining backup source and destination directories..."
-    SRC_PATH=`get_path "--src"`
-    DST_PATH=`get_path "--dst"`
-    
-    ## Prompt user if src and dst paths are correct
-    path_check
-}
-
-
-
-## Initialize the program start and end run times
-function init_time {
-    case "$1" in
-        "--start")
-            ## Define time of start
-            START_TIME=`date +%s`
-            START_DATE=`date --date="@${START_TIME}"`
-            
-            ## Define log file containing a summary of the backup duration
-            log_str=`echo "${START_DATE}" | tr ' ' '-'`
-            BACKUP_LOG="${DST_PATH}/Backup_${log_str}.log"
-            ;;
-        
-        "--end")
-            ## Define time of completion
-            END_TIME=`date +%s`
-            END_DATE=`date --date="@${END_TIME}"`
-            ;;
-    esac
-}
-
-
-
-## Initialize full system backup 
-function init_full_backup {
-    echo ":: Beginning Full System Backup..."
-    root_check
-}
-
-
-
-## ############################################
-## ##### ABSOLUTE PATHS AND EXCLUDE PATHS #####
-## ############################################
-
-## Get directories to exclude
-function get_exclude_dir {
-    
-    ## Change array delimeter
-    local IFS=$'\n'
-    
-    ## Prompt user
-    local ans
-    read -p "> " ans
-    
-    ## User response for not excluding directories
-    case "${ans}" in
-        ""|n|N) return ;;
-    esac
-    
-    ## Get the directories to exclude
-    temp=(`echo "${ans}" | sed 's/\,/\n/g'`)
-    for dir in "${temp[@]}"; do
-        echo "${dir}"
+        shift
     done
-}
 
-
-
-## Determines the full location path
-function get_path {
-    
-    ## Location to backup
-    case "$1" in
-        "--src")
-            loc="${ARGV[1]}"
-            
-            ## Full system backup will backup root directory
-            if [[ "${ARGV[0]}" == "--full" ]]; then echo "/"; return; fi
-            ;;
-        
-        "--dst")
-            loc="${ARGV[2]}"
-            ;;
-    esac
-    
-    ## Create full system backup directory if necessary
-    case "${ARGV[0]}" in
-        "--full")
-            
-            ## Determine path of directory to save full system backup
-            now=`date +"%m.%d.%y--%H:%M:%S"`
-            dir="Full-System-Backup--${now}"
-            
-            if [ -e "${loc}" ]; then
-                loc="${loc}/${dir}"
-            else
-                loc="$(pwd)/${dir}"
-            fi
-            
-            ## Create the directory in which to save the full system backup
-            mkdir "${loc}"
-            ;;
-    esac
-    
-    ## Absolute path given
-    if [[ "${loc:0:1}" == "/" ]] && [ -e "${loc}" ]; then
-        echo "${loc}"
+    # Run options
+    if [ -n "${FILES}" ]; then
+        run_file_backup "${FILES[@]}"
+    elif [ -n "${BACKUP}" ]; then
+        run_backup "${SOURCE}" "${DESTINATION}" "${EXCLUDE}"
+    elif [ -n "${FULLBACKUP}" ]; then
+        run_full_backup "${DESTINATION}" "${EXCLUDE}"
     else
-        
-        ## Construct absolute path
-        loc="$(pwd)/${loc}"
-        
-        if [ -e "${loc}" ]; then
-            echo "${loc}"
-        else
-            echo "Unknown"
-        fi
+        :
     fi
 }
 
-
-
-## Define files/directories to exclude
-function rsync_exclude {
-    
-    ## Prompt user for directories to exclude
-    echo -e "Which directories would you like to exclude?" \
-         "\nExample: '/proc/sys,/dev/block,/boot/grub'" \
-         "\nHit [enter] to skip."
-    
-    ## Get excluded directories
-    case "${ans}" in
-        "") ;;
-        *)
-            EXCLUDE=(`get_exclude_dir`)
-            ;;
-    esac
-    
-    ## Default excluded directories for FULL SYSTEM BACKUP
-    case "${ARGV[0]}" in
-        "--full")
-            EXCLUDE+=(
-                /dev
-                /proc
-                /sys
-                /tmp
-                /run
-                /lost+found
-                /var/lib/pacman/sync
-                /home/*/.thumbnails
-                /home/gabeg/.mozilla/firefox/*.default/Cache
-                /home/gabeg/.cache/mozilla
-                /usr/local/exelis
-                /media
-                /swapfile
-            )
-            ;;
-    esac
+# ******************************************************************************
+# Print program usage
+usage() {
+    echo "Usage ${PROG} [options] <args>"
+    echo 
+    echo "Options:"
+    echo "    -h, --help"
+    echo "        Print program usage."
+    echo
+    echo "    -f, --files <files>"
+    echo "        Backup one or more files by appending '.bak' to the name."
+    echo
+    echo "    -b, --backup <src>"
+    echo "        Backup a directory."
+    echo
+    echo "    --full-backup <dst>"
+    echo "        Full backup of entire system."
+    echo 
+    echo "    -d, --destination <dst>"
+    echo "        Destination directory to save backup to."
+    echo
+    echo "    -e, --rsync-exclude <exclude>"
+    echo "        Directories to exclude when running backup."
+    echo
+    echo "Arguments:"
+    echo "    <files>"
+    echo "        One or more files to backup."
+    echo
+    echo "    <src>"
+    echo "        Comma separated list of one or more source directories."
+    echo
+    echo "    <dst>"
+    echo "        Destination directory to save backup to."
+    echo
+    echo "    <exclude>"
+    echo "        Comma separated list of directories to exclude from backup."
 }
 
+# ******************************************************************************
+# Make backup files ( append '.bak' to file(s) )
+run_file_backup()
+{
+    for f in "${@}"; do
+        # Ignore. From getopts indicating end of arguments
+        if [ "${f}" == "--" ]; then
+            continue
+        fi
 
-
-## Define rsync options
-function rsync_options {
-    
-    ## Append exclusions to rsync options
-    for dir in "${EXCLUDE[@]}"; do 
-        if [ -e "${dir}" ]; then
-            OPTIONS+=("--exclude=${dir}/*")
-        else
-            echo ":: Cannot exclude '${dir}', not a directory."
+        # Backup file
+        cp -anv "${f}" "${f}.bak"
+        if [ $? -ne 0 ]; then 
+            print_warn "Skipping '${f}'"
+            continue
         fi
     done
 }
 
+# ******************************************************************************
+# Run backup
+run_backup()
+{
+    local src="${1}"
+    local dst="${2}"
+    local exclude="${3}"
 
+    # Backup
+    local start=$(date +%s)
+    rsync_backup "${src}" "${dst}" "${exclude}"
+    local stop=$(date +%s)
+    print_backup_done "${start}" "${stop}"
+}
 
-## ##########################
-## ##### CREATE BACKUPS ##### 
-## ##########################
+# ******************************************************************************
+# Full system backup 
+full_backup()
+{
+    local src="/"
+    local dst="${1}"
+    local exclude="${2}"
 
-## Make backup files ( append '.bak' to file(s) )
-function file_backup {
-    for file in "$@"; do        
-        cp -nrv "${file}" "${file}.bak"
-        if [ $? -eq 1 ]; then exit $?; fi
+    # Check root
+    if [ ${UID} -ne 0 ]; then
+        print_err "Unable to run full backup: Must be run by root."
+        exit ${STATUS_ROOT}
+    fi
+
+    # Append default directories to exclude list
+    local defaultdir=(
+        /dev
+        /lost+found
+        /media
+        /mnt
+        /proc
+        /swapfile
+        /sys
+        /tmp
+        /home/*/.thumbnails
+        /home/gabeg/.mozilla/firefox/*.default/Cache
+        /home/gabeg/.cache
+        /home/gabeg/.local
+    )
+    for d in "${defaultdir[@]}"; do
+        exclude="${exclude},${d}"
     done
-    
-    exit 0
+
+    # Create backup
+    print_info "Beginning Full System Backup..."
+    local log="${dst}/Backup_Summary_$(date +%FT%T%z).log"
+
+
+    run_backup "${src}" "${dst}" "${exclude}" | tee -a "${log}"
+    sed -i 's/\r/\n/g' "${log}" 
 }
 
+# ******************************************************************************
+# Use rsync to backup
+rsync_backup()
+{
+    local src="${1}"
+    local dst="${2}"
+    local exclude="${3}"
+    local srcdirs=
 
+    # Check existence of source and destination locations
+    srcdirs=($(get_source_directories "${src}"))
+    if [ $? -ne 0 ]; then
+        exit ${STATUS_SRCDIR}
+    fi
+    if [ ! -e "${dst}" ]; then
+        print_err "Unable to create backup: Destination does not exist."
+        exit ${STATUS_DSTDIR}
+    fi
 
-## Backup source item to destination directory
-function rsync_backup {
-    echo -e "\n:: Backing up files..."
-    
-    rsync_exclude
-    rsync_options
-    rsync "${OPTIONS[@]}" "${SRC_PATH}" "${DST_PATH}"
+    # Backup
+    print_info "Backing up files..."
+    local options=($(get_rsync_options))
+    rsync "${options[@]}" "${srcdirs[@]}" "${dst}"
 }
 
-
-
-## ####################################
-## ##### BACKUP FILES/DIRECTORIES #####
-## ####################################
-
-## Execute the chosen backup based on user input
-function main {
-    
-    ## Check user options
-    case "${ARGV[0]}" in
-        
-        ## Print the help screen
-        "-h"|"--help") 
-            print_usage
-            ;;
-        
-        ## Full system backup
-        "--full")
-            init_full_backup
-            ;;
-        
-        ## Back Up Specified File(s)
-        "-f"|"--files") 
-            n=$[ ${#ARGV[@]} - 1 ]
-            file_backup "${ARGV[@]:1:${n}}"
-            ;;
-        
-        ## Regular directory backup
-        "-b"|"--backup")
-            ;;
-        
-        ## Print the help screen
-        *) 
-            print_usage
-            ;;
-    esac
-    
-    ## Initialize source and destination paths
-    init_backup_paths 
-
-    
-    ## Backup source to destination
-    init_time "--start"
-    rsync_backup "${ARGV[0]}" | tee -a "${BACKUP_LOG}"
-    init_time "--end"
-    
-    ## Fix backup log (rsync prints carriage returns ('\r')
-    sed -i 's/\r/\n/g' "${BACKUP_LOG}" 
-    sed -i '/^$/d' "${BACKUP_LOG}" 
-    
-    ## Print done message
-    print_backup_done | tee -a "${BACKUP_LOG}"
+# ******************************************************************************
+# Return rsync options
+get_rsync_options()
+{
+    local exclude="${1}"
+    local options=(--delete -aAXvh --progress)
+    local IFS=$','
+    for d in $(echo "${exclude}"); do
+        if [ -d "${d}" ]; then
+            options+=("--exclude=${d}/*")
+        else
+            print_warn "Unable to exclude '${dir}'."
+        fi
+    done
+    echo "${options[@]}"
 }
 
+# ******************************************************************************
+# Return source directories
+get_source_directories()
+{
+    local srcdirs=()
+    local IFS=$','
+    for f in $(echo "${src}"); do
+        if [ ! -e "${f}" ]; then
+            print_err "Unable to create backup: Source does not exist."
+            return ${STATUS_SRCDIR}
+        fi
+        srcdirs+=("${f}")
+    done
+    echo "${srcdirs[@]}"
+}
 
+# ******************************************************************************
+# Print backup done message
+print_backup_done()
+{
+    local startsec="${1}"
+    local stopsec="${2}"
+    local startdate=$(date --date="@${startsec}")
+    local stopdate=$(date --date="@${stopsec}")
+    local min=$[ (${stopsec} - ${startsec}) / 60 ]
+    local sec=$[ (${stopsec} - ${startsec}) % 60 ]
 
-## Begin backup 
-main 
+    echo
+    echo "--- Backup Results ---"
+    printf "%-5s %s\n" "Start" ": ${startdate}"
+    printf "%-5s %s\n" "End"   ": ${stopdate}"
+    printf "%-5s %s\n" "Total" ": ${min} minutes, ${sec} seconds" 
+}
+
+# ******************************************************************************
+# Run script
+main "${@}"

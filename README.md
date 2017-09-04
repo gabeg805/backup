@@ -1,49 +1,11 @@
-===========
-What is it?
-===========
+# BACK
 
-Backup individual/multiple files and directories, or backup the whole system.
+## What is it?
 
+Backup individual or multiple files/directories, and can even backup the whole
+file system.
 
+## Installation
 
-=============
-Documentation
-=============
+None. Can be run as is without any installation.
 
-Program documentation can be found in the header of the program.
-
-
-
-============
-Installation
-============
-
-Update your PATH environment variable in your shell rc file with:
-    
-    $ export PATH="${PATH}":"/PATH/TO/PROGRAM/back"
-
-Now the program is ready for use!
-
-
-
-========
-Contacts
-========
-
-If you have any problems, feel free to email me at 'gabeg@bu.edu'.
-
-
-
-==================
-Potential Problems
-==================
-
-- TBD
-
-
-
-=====
-To-Do
-=====
-
-- Add a Dropbox Picture/Video backup option.
