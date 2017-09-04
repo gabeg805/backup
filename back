@@ -33,7 +33,8 @@ STATUS_ROOT=100
 
 # ******************************************************************************
 # Main
-main() {
+main()
+{
     [ $# -eq 0 ] && usage && exit ${STATUS_NORMAL}
 
     short="hvf:b:d:e:"
@@ -131,12 +132,16 @@ main() {
 
 # ******************************************************************************
 # Print program usage
-usage() {
+usage()
+{
     echo "Usage ${PROG} [options] <args>"
     echo 
     echo "Options:"
     echo "    -h, --help"
     echo "        Print program usage."
+    echo
+    echo "    -v, --verbose"
+    echo "        Print verbosely."
     echo
     echo "    -f, --files <files>"
     echo "        Backup one or more files by appending '.bak' to the name."

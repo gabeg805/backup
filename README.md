@@ -7,5 +7,5 @@ file system.
 
 ## Installation
 
-None. Can be run as is without any installation.
+None. Can be run as is.
 
