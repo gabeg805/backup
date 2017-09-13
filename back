@@ -22,7 +22,7 @@ PROGDIR=$(dirname "$(readlink -f "${0}")")
 VERBOSE=
 
 # Source utility
-. "${PROGDIR}/../lib/util.sh"
+. "${PROGDIR}/../lib/bash/util.sh"
 
 # Exit statuses
 STATUS_NORMAL=0
