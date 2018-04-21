@@ -1,30 +1,22 @@
 #!/bin/bash
-# ******************************************************************************
+# ------------------------------------------------------------------------------
 # 
-# Name:    back
-# Author:  Gabriel Gonzalez
-# Email:   gabeg@bu.edu
-# License: The MIT License (MIT)
+# File: back
+# Author: Gabriel Gonzalez
 # 
-# Syntax: back [options] [args]
+# Brief: A file/directory/system backup program.
 # 
-# Description: A file/directory/system backup program.
-# 
-# Notes: None.
-# 
-# ******************************************************************************
+# ------------------------------------------------------------------------------
 
-# Globals
-PROG="${0##*/}"
-PROGDIR=$(dirname "$(readlink -f "${0}")")
+##
+# Source utilities.
+##
+. "commandline.sh"
+. "io.sh"
 
-# Options
-VERBOSE=
-
-# Source utility
-. "${PROGDIR}/../lib/bash/util.sh"
-
-# Exit statuses
+##
+# Exit statuses.
+##
 STATUS_NORMAL=0
 STATUS_GETOPT=1
 STATUS_ARGS=2
@@ -32,150 +24,60 @@ STATUS_SRCDIR=10
 STATUS_DSTDIR=11
 STATUS_ROOT=100
 
-# ******************************************************************************
-# Main
+##
+# Backup.
+##
 main()
 {
-    [ $# -eq 0 ] && usage && exit ${STATUS_NORMAL}
+    cli_options "-h|--help             |Print program usage." \
+                "-b|--backup=src:::    |Backup one or more directories. Must be run with '-d' and, optionally, with '-e'." \
+                "-d|--destination=dest:|Destination path to save backup to." \
+                "-e|--exclude=dir:::   |Directories to exclude from the backup." \
+                "-f|--files=files:::   |Backup one or more files. Appends '.bak' to the name." \
+                "-F|--full-backup      |Full backup of entire system. Must be run with '-d' and, optionally, with '-e'." \
+                "-v|--verbose          |Print verbose output."
+    cli_parse "${@}"
 
-    short="hvf:b:d:e:"
-    long="help,verbose,files:,backup:,full-backup:,destination:,rsync-exclude:"
-    args=$(getopt -o "${short}" --long "${long}" --name "${PROG}" -- "${@}")
+    local backup=
+    local destination=
+    local exclude=
+    local files=
+    local fullbackup=
 
-    [ $? -ne 0 ] && usage && exit ${STATUS_GETOPT}
-    eval set -- "${args}"
-
-    # Options
-    local FILES=
-    local BACKUP=
-    local FULLBACKUP=
-    local SOURCE=
-    local DESTINATION=
-    local EXCLUDE=
-
-    # Parse options
-    while true; do
-        case "${1}" in
-            # Print usage
-            -h|--help)
-                usage
-                exit 0
-                ;;
-
-            # Verbose
-            -v|--verbose)
-                VERBOSE=true
-                ;;
-
-            # Backup files
-            -f|--files)
-                shift
-                if [ -n "${BACKUP}" -o -n "${FULLBACKUP}" ]; then
-                    print_err "Unable to backup files: Multiple options specified."
-                    exit ${STATUS_ARGS}
-                fi
-                FILES=("${@}")
-                ;;
-
-            # Backup directory(ies)
-            -b|--backup)
-                shift
-                if [ -n "${FILES}" -o -n "${FULLBACKUP}" ]; then
-                    print_err "Unable to backup files: Multiple options specified."
-                    exit ${STATUS_ARGS}
-                fi
-                BACKUP=true
-                SOURCE="${1}"
-                ;;
-
-            # Full backup
-            --full-backup)
-                shift
-                if [ -n "${FILES}" -o -n "${BACKUP}" ]; then
-                    print_err "Unable to backup files: Multiple options specified."
-                    exit ${STATUS_ARGS}
-                fi
-                FULLBACKUP=true
-                DESTINATION="${1}"
-                ;;
-
-            # Destination location
-            -d|--destination)
-                shift
-                DESTINATION="${1}"
-                ;;
-
-            # Exclude directories for rsync
-            -e|--rsync-exclude)
-                shift
-                EXCLUDE="${1}"
-                ;;
-
-            # End of options
-            --) 
-                break
-                ;;
-        esac
-        shift
-    done
-
-    # Run options
-    if [ -n "${FILES}" ]; then
-        run_file_backup "${FILES[@]}"
-    elif [ -n "${BACKUP}" ]; then
-        run_backup "${SOURCE}" "${DESTINATION}" "${EXCLUDE}"
-    elif [ -n "${FULLBACKUP}" ]; then
-        run_full_backup "${DESTINATION}" "${EXCLUDE}"
+    if [ -n "${backup}" ]
+    then
+        back_directory_backup "${backup}" "${destination}" "${exclude}"
+    elif [ -n "${files}" ]
+    then
+        back_file_backup "${files}"
+    elif [ -n "${fullbackup}" ]
+    then
+        back_full_backup "${destination}" "${exclude}"
     else
         :
     fi
+    exit $?
 }
 
-# ******************************************************************************
-# Print program usage
-usage()
+##
+# Backup one or more directories.
+##
+back_directory_backup()
 {
-    echo "Usage ${PROG} [options] <args>"
-    echo 
-    echo "Options:"
-    echo "    -h, --help"
-    echo "        Print program usage."
-    echo
-    echo "    -v, --verbose"
-    echo "        Print verbosely."
-    echo
-    echo "    -f, --files <files>"
-    echo "        Backup one or more files by appending '.bak' to the name."
-    echo
-    echo "    -b, --backup <src>"
-    echo "        Backup a directory."
-    echo
-    echo "    --full-backup <dst>"
-    echo "        Full backup of entire system."
-    echo 
-    echo "    -d, --destination <dst>"
-    echo "        Destination directory to save backup to."
-    echo
-    echo "    -e, --rsync-exclude <exclude>"
-    echo "        Directories to exclude when running backup."
-    echo
-    echo "Arguments:"
-    echo "    <files>"
-    echo "        One or more files to backup."
-    echo
-    echo "    <src>"
-    echo "        Comma separated list of one or more source directories."
-    echo
-    echo "    <dst>"
-    echo "        Destination directory to save backup to."
-    echo
-    echo "    <exclude>"
-    echo "        Comma separated list of directories to exclude from backup."
+    local src="${1}"
+    local dst="${2}"
+    local exclude="${3}"
+
+    # Backup
+    local start=$(date +%s)
+    rsync_backup "${src}" "${dst}" "${exclude}"
+    local stop=$(date +%s)
+    print_backup_done "${start}" "${stop}"
 }
 
 # ******************************************************************************
 # Make backup files ( append '.bak' to file(s) )
-run_file_backup()
+back_file_backup()
 {
     for f in "${@}"; do
         # Ignore. From getopts indicating end of arguments
@@ -193,23 +95,8 @@ run_file_backup()
 }
 
 # ******************************************************************************
-# Run backup
-run_backup()
-{
-    local src="${1}"
-    local dst="${2}"
-    local exclude="${3}"
-
-    # Backup
-    local start=$(date +%s)
-    rsync_backup "${src}" "${dst}" "${exclude}"
-    local stop=$(date +%s)
-    print_backup_done "${start}" "${stop}"
-}
-
-# ******************************************************************************
 # Full system backup 
-full_backup()
+back_full_backup()
 {
     local src="/"
     local dst="${1}"
@@ -245,7 +132,7 @@ full_backup()
     local log="${dst}/Backup_Summary_$(date +%FT%T%z).log"
 
 
-    run_backup "${src}" "${dst}" "${exclude}" | tee -a "${log}"
+    back_directory_backup "${src}" "${dst}" "${exclude}" | tee -a "${log}"
     sed -i 's/\r/\n/g' "${log}" 
 }
 
