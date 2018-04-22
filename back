@@ -17,6 +17,10 @@
 ##
 # Exit statuses.
 ##
+EXIT_BACK_INVALID_DIRECTORY=10
+EXIT_BACK_INVALID_FILE=11
+EXIT_BACK_USER_NOT_ROOT=12
+
 STATUS_NORMAL=0
 STATUS_GETOPT=1
 STATUS_ARGS=2
@@ -35,24 +39,40 @@ main()
                 "-e|--exclude=dir:::   |Directories to exclude from the backup." \
                 "-f|--files=files:::   |Backup one or more files. Appends '.bak' to the name." \
                 "-F|--full-backup      |Full backup of entire system. Must be run with '-d' and, optionally, with '-e'." \
+                "-o|--options=:        |Additional rsync options." \
                 "-v|--verbose          |Print verbose output."
     cli_parse "${@}"
 
-    local backup=
-    local destination=
-    local exclude=
-    local files=
-    local fullbackup=
+    local help=$(cli_get "help")
+    local backup=$(cli_get "backup")
+    local destination=$(cli_get "destination")
+    local exclude=$(cli_get "exclude")
+    local files=$(cli_get "files")
+    local fullbackup=$(cli_get "full-backup")
+    local options=$(cli_get "options")
 
-    if [ -n "${backup}" ]
+    if [ -z "${exclude}" ]
     then
-        back_directory_backup "${backup}" "${destination}" "${exclude}"
+        exclude="none"
+    fi
+    if [ -z "${options}" ]
+    then
+        options="none"
+    fi
+
+    if [ -n "${help}" ]
+    then
+        cli_usage
+    elif [ -n "${backup}" ]
+    then
+        back_directory_backup "${backup}" "${destination}" "${exclude}" \
+                              "${options}"
     elif [ -n "${files}" ]
     then
         back_file_backup "${files}"
     elif [ -n "${fullbackup}" ]
     then
-        back_full_backup "${destination}" "${exclude}"
+        back_full_backup "${destination}" "${exclude}" "${options}"
     else
         :
     fi
@@ -67,82 +87,94 @@ back_directory_backup()
     local src="${1}"
     local dst="${2}"
     local exclude="${3}"
-
-    # Backup
-    local start=$(date +%s)
-    rsync_backup "${src}" "${dst}" "${exclude}"
-    local stop=$(date +%s)
-    print_backup_done "${start}" "${stop}"
+    local options="${4}"
+    local IFS=$'|'
+    if  ! back_is_destination "${dst}"
+    then
+        back_print_error "directory" "${dst}"
+        return ${EXIT_BACK_INVALID_DIRECTORY}
+    fi
+    for d in ${src}
+    do
+        if ! back_is_source "${src}"
+        then
+            back_print_error "directory" "${d}"
+            return ${EXIT_BACK_INVALID_DIRECTORY}
+        fi
+    done
+    rsync_backup "${src}" "${dst}" "${exclude}" "${options}"
+    return $?
 }
 
-# ******************************************************************************
-# Make backup files ( append '.bak' to file(s) )
+##
+# Backup one or more files.
+# 
+# Append ".bak" to file backups.
+##
 back_file_backup()
 {
-    for f in "${@}"; do
-        # Ignore. From getopts indicating end of arguments
-        if [ "${f}" == "--" ]; then
-            continue
+    local file="${1}"
+    local IFS=$'|'
+    for f in ${file}
+    do
+        if ! back_is_file "${f}"
+        then
+            back_print_error "file" "${f}"
+            return ${EXIT_BACK_INVALID_FILE}
         fi
-
-        # Backup file
         cp -anv "${f}" "${f}.bak"
-        if [ $? -ne 0 ]; then 
-            print_warn "Skipping '${f}'"
-            continue
-        fi
     done
 }
 
-# ******************************************************************************
-# Full system backup 
+##
+# Create a full system backup.
+##
 back_full_backup()
 {
-    local src="/"
     local dst="${1}"
     local exclude="${2}"
-
-    # Check root
-    if [ ${UID} -ne 0 ]; then
-        print_err "Unable to run full backup: Must be run by root."
-        exit ${STATUS_ROOT}
+    local options="${3}"
+    if [ ${UID} -ne 0 ]
+    then
+        print_err "Unable to run full backup: Must be run as root."
+        exit ${EXIT_BACK_USER_NOT_ROOT}
+    fi
+    if  ! back_is_destination "${dst}"
+    then
+        back_print_error "directory" "${dst}"
+        return ${EXIT_BACK_INVALID_DIRECTORY}
     fi
 
-    # Append default directories to exclude list
-    local defaultdir=(
-        /dev
-        /lost+found
-        /media
-        /mnt
-        /proc
-        /swapfile
-        /sys
-        /tmp
-        /home/*/.thumbnails
-        /home/gabeg/.mozilla/firefox/*.default/Cache
-        /home/gabeg/.cache
-        /home/gabeg/.local
-    )
-    for d in "${defaultdir[@]}"; do
-        exclude="${exclude},${d}"
-    done
+    print_info "Running Full System Backup."
 
-    # Create backup
-    print_info "Beginning Full System Backup..."
-    local log="${dst}/Backup_Summary_$(date +%FT%T%z).log"
+    exclude+="|/home/*/.thumbnails|/home/*/.cache|/home/*/.mozilla/firefox/*.default/storage"
+    local src=
 
+    options+="|--link-dest=${dst}"
 
-    back_directory_backup "${src}" "${dst}" "${exclude}" | tee -a "${log}"
+    local date=$(date +%F)
+    local latestlink="${dst}/latest"
+    local latestdir="${dst}${date}"
+    local log="${latestdir}/Backup_Summary_$(date +%T%z).log"
+    mkdir -pv "${latestdir}"
+
+    back_directory_backup "${src}" "${dst}" "${exclude}" "${options}" \
+        | tee -a "${log}"
     sed -i 's/\r/\n/g' "${log}" 
+
+    rm -f "${latestlink}"
+    ln -sv "${latestdir}" "${latestlink}"
 }
 
-# ******************************************************************************
-# Use rsync to backup
+##
+# Use rsync to backup.
+##
 rsync_backup()
 {
     local src="${1}"
     local dst="${2}"
     local exclude="${3}"
+    local options="${4}"
     local srcdirs=
 
     # Check existence of source and destination locations
@@ -150,48 +182,9 @@ rsync_backup()
     if [ $? -ne 0 ]; then
         exit ${STATUS_SRCDIR}
     fi
-    if [ ! -e "${dst}" ]; then
-        print_err "Unable to create backup: Destination does not exist."
-        exit ${STATUS_DSTDIR}
-    fi
 
-    # Backup
-    print_info "Backing up files..."
-    local options=($(get_rsync_options))
-    rsync "${options[@]}" "${srcdirs[@]}" "${dst}"
-}
-
-# ******************************************************************************
-# Return rsync options
-get_rsync_options()
-{
-    local exclude="${1}"
-    local options=(--delete -aAXvh --progress)
-    local IFS=$','
-    for d in $(echo "${exclude}"); do
-        if [ -d "${d}" ]; then
-            options+=("--exclude=${d}/*")
-        else
-            print_warn "Unable to exclude '${dir}'."
-        fi
-    done
-    echo "${options[@]}"
-}
-
-# ******************************************************************************
-# Return source directories
-get_source_directories()
-{
-    local srcdirs=()
-    local IFS=$','
-    for f in $(echo "${src}"); do
-        if [ ! -e "${f}" ]; then
-            print_err "Unable to create backup: Source does not exist."
-            return ${STATUS_SRCDIR}
-        fi
-        srcdirs+=("${f}")
-    done
-    echo "${srcdirs[@]}"
+    local IFS=$'|'
+    rsync -aEHAXxPhv ${src} "${dst}"
 }
 
 # ******************************************************************************
@@ -212,6 +205,75 @@ print_backup_done()
     printf "%-5s %s\n" "Total" ": ${min} minutes, ${sec} seconds" 
 }
 
-# ******************************************************************************
-# Run script
+##
+# Print backup error.
+##
+back_print_error()
+{
+    local type="${1}"
+    local path="${2}"
+    local message="Unable to create backup: "
+    case "${type}" in
+        directory) message+="Directory " ;;
+        file) message+="File " ;;
+        *) return 1 ;;
+    esac
+    message+="'${path}' does not exist, or there is a permissions issue."
+    return 0
+}
+
+##
+# Check if input is a source directory.
+# 
+# The directory must exist and the user must have read and execute permissions.
+##
+back_is_source()
+{
+    local src="${1}"
+    if [ -d "${src}" -a -r "${src}" -a -x "${src}" ]
+    then
+        return 0
+    else
+        return 1
+    fi
+}
+
+##
+# Check if input is a destination directory.
+# 
+# The directory must exist and the user must have read, write, and execute
+# permissions.
+##
+back_is_destination()
+{
+    local dst="${1}"
+    if [ -d "${dst}" -a -r "${dst}" -a -w "${dst}" -a -x "${dst}" ]
+    then
+        return 0
+    else
+        return 1
+    fi
+}
+
+##
+# Check ig input is a file.
+# 
+# The file must exist and the user must have read permissions.
+##
+back_is_file()
+{
+    local IFS=$'|'
+    for file in ${@}
+    do
+        if [ ! -f "${file}" -o ! -r "${file}" ]
+        then
+            return 1
+        fi
+    done
+    return 0
+}
+
+##
+# Run script.
+##
 main "${@}"
