@@ -17,16 +17,9 @@
 ##
 # Exit statuses.
 ##
-EXIT_BACK_INVALID_DIRECTORY=10
-EXIT_BACK_INVALID_FILE=11
-EXIT_BACK_USER_NOT_ROOT=12
-
-STATUS_NORMAL=0
-STATUS_GETOPT=1
-STATUS_ARGS=2
-STATUS_SRCDIR=10
-STATUS_DSTDIR=11
-STATUS_ROOT=100
+EXIT_BACKUP_INVALID_DIRECTORY=10
+EXIT_BACKUP_INVALID_FILE=11
+EXIT_BACKUP_USER_NOT_ROOT=12
 
 ##
 # Backup.
@@ -38,8 +31,7 @@ main()
                 "-d|--destination=dest:|Destination path to save backup to." \
                 "-e|--exclude=dir:::   |Directories to exclude from the backup." \
                 "-f|--files=files:::   |Backup one or more files. Appends '.bak' to the name." \
-                "-F|--full-backup      |Full backup of entire system. Must be run with '-d' and, optionally, with '-e'." \
-                "-o|--options=:        |Additional rsync options." \
+                "-S|--system           |Full sytem backup. Must be run with '-d' and, optionally, with '-e'." \
                 "-v|--verbose          |Print verbose output."
     cli_parse "${@}"
 
@@ -48,31 +40,20 @@ main()
     local destination=$(cli_get "destination")
     local exclude=$(cli_get "exclude")
     local files=$(cli_get "files")
-    local fullbackup=$(cli_get "full-backup")
-    local options=$(cli_get "options")
-
-    if [ -z "${exclude}" ]
-    then
-        exclude="none"
-    fi
-    if [ -z "${options}" ]
-    then
-        options="none"
-    fi
+    local system=$(cli_get "system")
 
     if [ -n "${help}" ]
     then
         cli_usage
     elif [ -n "${backup}" ]
     then
-        back_directory_backup "${backup}" "${destination}" "${exclude}" \
-                              "${options}"
+        backup_directory "${backup}" "${destination}" "${exclude}"
     elif [ -n "${files}" ]
     then
-        back_file_backup "${files}"
-    elif [ -n "${fullbackup}" ]
+        backup_file "${files}"
+    elif [ -n "${system}" ]
     then
-        back_full_backup "${destination}" "${exclude}" "${options}"
+        backup_system "${destination}" "${exclude}"
     else
         :
     fi
@@ -82,27 +63,16 @@ main()
 ##
 # Backup one or more directories.
 ##
-back_directory_backup()
+backup_directory()
 {
     local src="${1}"
     local dst="${2}"
     local exclude="${3}"
-    local options="${4}"
-    local IFS=$'|'
-    if  ! back_is_destination "${dst}"
+    if ! backup_directory_verify "${src}" "${dst}"
     then
-        back_print_error "directory" "${dst}"
-        return ${EXIT_BACK_INVALID_DIRECTORY}
+        return ${EXIT_BACKUP_INVALID_DIRECTORY}
     fi
-    for d in ${src}
-    do
-        if ! back_is_source "${src}"
-        then
-            back_print_error "directory" "${d}"
-            return ${EXIT_BACK_INVALID_DIRECTORY}
-        fi
-    done
-    rsync_backup "${src}" "${dst}" "${exclude}" "${options}"
+    rsync_backup "${src}" "${dst}" "${exclude}"
     return $?
 }
 
@@ -111,16 +81,15 @@ back_directory_backup()
 # 
 # Append ".bak" to file backups.
 ##
-back_file_backup()
+backup_file()
 {
     local file="${1}"
     local IFS=$'|'
     for f in ${file}
     do
-        if ! back_is_file "${f}"
+        if ! backup_file_verify "${f}"
         then
-            back_print_error "file" "${f}"
-            return ${EXIT_BACK_INVALID_FILE}
+           return ${EXIT_BACKUP_INVALID_FILE}
         fi
         cp -anv "${f}" "${f}.bak"
     done
@@ -129,21 +98,17 @@ back_file_backup()
 ##
 # Create a full system backup.
 ##
-back_full_backup()
+backup_system()
 {
+    local src=$(backup_system_get_source)
     local dst="${1}"
     local exclude="${2}"
-    local options="${3}"
-    if [ ${UID} -ne 0 ]
-    then
-        print_err "Unable to run full backup: Must be run as root."
-        exit ${EXIT_BACK_USER_NOT_ROOT}
-    fi
-    if  ! back_is_destination "${dst}"
-    then
-        back_print_error "directory" "${dst}"
-        return ${EXIT_BACK_INVALID_DIRECTORY}
-    fi
+    backup_system_verify "${src}" "${dst}"
+    case $? in
+        1) return ${EXIT_BACKUP_INVALID_DIRECTORY} ;;
+        2) return ${EXIT_BACKUP_USER_NOT_ROOT} ;;
+        *) ;;
+    esac
 
     print_info "Running Full System Backup."
 
@@ -158,7 +123,7 @@ back_full_backup()
     local log="${latestdir}/Backup_Summary_$(date +%T%z).log"
     mkdir -pv "${latestdir}"
 
-    back_directory_backup "${src}" "${dst}" "${exclude}" "${options}" \
+    backup_directory "${src}" "${dst}" "${exclude}" "${options}" \
         | tee -a "${log}"
     sed -i 's/\r/\n/g' "${log}" 
 
@@ -187,6 +152,93 @@ rsync_backup()
     rsync -aEHAXxPhv ${src} "${dst}"
 }
 
+##
+# Verify that source and destination exist.
+##
+backup_directory_verify()
+{
+    local src="${1}"
+    local dst="${2}"
+    local IFS=$'|'
+    if  ! backup_is_destination "${dst}"
+    then
+        backup_print_error "directory" "${dst}"
+        return 1
+    fi
+    for d in ${src}
+    do
+        if ! backup_is_source "${src}"
+        then
+            backup_print_error "directory" "${d}"
+            return 1
+        fi
+    done
+    return 0
+}
+
+##
+# Verify that file exists.
+##
+backup_file_verify()
+{
+    local file="${1}"
+    if ! backup_is_file "${file}"
+    then
+        backup_print_error "file" "${file}"
+        return 1
+    fi
+    return 0
+}
+
+##
+# Verify that everything is prepared for full system backup.
+##
+backup_system_verify()
+{
+    local src="${1}"
+    local dst="${2}"
+    if [ ${UID} -ne 0 ]
+    then
+        print_err "Unable to run full system backup: Must be run as root."
+        return 2
+    fi
+    backup_directory_verify "${src}" "${dst}"
+    return $?
+}
+
+fun()
+{
+    return 2
+}
+
+##
+# Return the source directories for a full system backup.
+##
+backup_system_get_source()
+{
+    local line=
+    local i=0
+    local IFS=$'\n'
+    local mounts=
+    for line in $(df -h -x tmpfs -x devtmpfs)
+    do
+        i=$[ ${i} + 1 ]
+        if [ ${i} -eq 1 ]
+        then
+            continue
+        fi
+        local IFS=$' \t'
+        local columns=(${line})
+        local pt="${columns[5]}"
+        case "${pt}" in
+            *mnt*|*media*|*srv*) continue ;;
+            *) mounts+="${pt}|" ;;
+        esac
+    done
+    echo "${mounts}"
+    return 0
+}
+
 # ******************************************************************************
 # Print backup done message
 print_backup_done()
@@ -208,7 +260,7 @@ print_backup_done()
 ##
 # Print backup error.
 ##
-back_print_error()
+backup_print_error()
 {
     local type="${1}"
     local path="${2}"
@@ -227,7 +279,7 @@ back_print_error()
 # 
 # The directory must exist and the user must have read and execute permissions.
 ##
-back_is_source()
+backup_is_source()
 {
     local src="${1}"
     if [ -d "${src}" -a -r "${src}" -a -x "${src}" ]
@@ -244,7 +296,7 @@ back_is_source()
 # The directory must exist and the user must have read, write, and execute
 # permissions.
 ##
-back_is_destination()
+backup_is_destination()
 {
     local dst="${1}"
     if [ -d "${dst}" -a -r "${dst}" -a -w "${dst}" -a -x "${dst}" ]
@@ -260,7 +312,7 @@ back_is_destination()
 # 
 # The file must exist and the user must have read permissions.
 ##
-back_is_file()
+backup_is_file()
 {
     local IFS=$'|'
     for file in ${@}
