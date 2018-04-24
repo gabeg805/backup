@@ -123,8 +123,8 @@ backup_system()
     start=$(date +%s)
     backup_rsync "system" "${src}" "${dst}" "${exclude}" | tee -a "${logfile}"
     stop=$(date +%s)
-    backup_system_print_time "${start}" "${stop}" | tee -a "${logfile}"
     backup_system_move_latest_snapshot "${root}" "${dst}" | tee -a "${logfile}"
+    backup_system_print_time "${start}" "${stop}" | tee -a "${logfile}"
     backup_system_fix_log "${logfile}"
 }
 
