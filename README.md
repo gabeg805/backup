@@ -6,9 +6,9 @@ Backup individual files/directories, multiple files/directories, and or backup
 your whole filesystem.
 
 If you reference the Arch Wiki on Rsync, at the end it has a section on a
-(Snapshot Backup)[https://wiki.archlinux.org/index.php/rsync#Snapshot_backup] as
-well as a section on (File System
-Cloning)[https://wiki.archlinux.org/index.php/rsync#File_system_cloning]. This
+[Snapshot Backup](https://wiki.archlinux.org/index.php/rsync#Snapshot_backup) as
+well as a section on [File System
+Cloning](https://wiki.archlinux.org/index.php/rsync#File_system_cloning). This
 script does a combination of both to retain as much information as possible per
 snapshot.
 
