@@ -1,0 +1,452 @@
+#!/bin/bash
+# ------------------------------------------------------------------------------
+# 
+# File: back
+# Author: Gabriel Gonzalez
+# 
+# Brief: A file/directory/system backup program.
+# 
+# ------------------------------------------------------------------------------
+
+##
+# Source utilities.
+##
+. "commandline.sh"
+. "io.sh"
+
+##
+# Options.
+##
+VERBOSE=true
+
+##
+# Files.
+##
+BACKUP_EXCLUDE_FILE="/tmp/${PROJECT}_exclude.txt"
+
+##
+# Exit statuses.
+##
+EXIT_BACKUP_INVALID_DIRECTORY=10
+EXIT_BACKUP_INVALID_FILE=11
+EXIT_BACKUP_INVALID_BACKUP_TYPE=12
+EXIT_BACKUP_INVALID_FILE_TYPE=13
+EXIT_BACKUP_USER_NOT_ROOT=20
+
+##
+# Backup.
+##
+main()
+{
+    cli_options "-h|--help             |Print program usage." \
+                "-b|--backup=src:::    |Backup one or more directories. Must be run with '-d' and, optionally, with '-e'." \
+                "-d|--destination=dest:|Destination path to save backup to." \
+                "-e|--exclude=dir:::   |Directories to exclude from the backup." \
+                "-f|--files=files:::   |Backup one or more files. Appends '.bak' to the name." \
+                "-S|--system           |Full sytem backup. Must be run with '-d' and, optionally, with '-e'." \
+                "-v|--verbose          |Print verbose output."
+    cli_parse "${@}"
+
+    local help=$(cli_get "help")
+    local backup=$(cli_get "backup")
+    local destination=$(cli_get "destination")
+    local exclude=$(cli_get "exclude")
+    local files=$(cli_get "files")
+    local system=$(cli_get "system")
+
+    trap backup_cleanup EXIT
+    if [ -n "${help}" ]
+    then
+        cli_usage
+    elif [ -n "${backup}" ]
+    then
+        backup_directory "${backup}" "${destination}" "${exclude}"
+    elif [ -n "${files}" ]
+    then
+        backup_file "${files}"
+    elif [ -n "${system}" ]
+    then
+        backup_system "${destination}" "${exclude}"
+    else
+        :
+    fi
+    exit $?
+}
+
+##
+# Backup one or more directories.
+##
+backup_directory()
+{
+    local src="${1}"
+    local dst="${2}"
+    local exclude="${3}"
+    backup_directory_verify "${src}" "${dst}" || return $?
+    backup_rsync "backup" "${src}" "${dst}" "${exclude}"
+    return $?
+}
+
+##
+# Backup one or more files.
+# 
+# Append ".bak" to file backups.
+##
+backup_file()
+{
+    local file="${1}"
+    local IFS=$'|'
+    for f in ${file}
+    do
+        backup_file_verify "${f}" || return $?
+        cp -anv "${f}" "${f}.bak"
+    done
+}
+
+##
+# Create a full system backup.
+##
+backup_system()
+{
+    local src=$(backup_system_get_source)
+    local root=$(readlink -e "${1}")
+    local exclude=$(backup_system_get_exclude "${2}")
+    local dst=$(backup_system_get_destination "${root}")
+    local logfile=$(backup_system_get_log "${dst}")
+    local start=
+    local stop=
+    backup_system_verify "${src}" "${root}" || return $?
+
+    print_info "Running Full System Backup."
+    sleep 2
+    mkdir -p "${dst}"
+
+    start=$(date +%s)
+    backup_rsync "system" "${src}" "${dst}" "${exclude}" | tee -a "${logfile}"
+    stop=$(date +%s)
+    backup_system_print_time "${start}" "${stop}" | tee -a "${logfile}"
+    backup_system_move_latest_snapshot "${root}" "${dst}" | tee -a "${logfile}"
+    backup_system_fix_log "${logfile}"
+}
+
+##
+# Use rsync to backup.
+##
+backup_rsync()
+{
+    local type="${1}"
+    local src="${2}"
+    local dst="${3}"
+    local exclude="${4}"
+    local link=
+
+    case "${type}" in
+        backup)
+            ;;
+
+        system)
+            local latest=$(dirname "${dst}")/latest
+            link="--link-dest=${latest}"
+            ;;
+
+        *)
+            print_err "Unable to run rsync: Invalid backup type '${type}'."
+            return ${EXIT_BACKUP_INVALID_BACKUP_TYPE}
+            ;;
+    esac
+    local IFS=$'|'
+    backup_rsync_setup_exclude_file "${exclude}"
+    echo rsync -aEHAXxPhv --exclude-from="${BACKUP_EXCLUDE_FILE}" ${link} ${src} ${dst}
+    rsync -aEHAXxPhv --exclude-from="${BACKUP_EXCLUDE_FILE}" ${link} ${src} ${dst}
+    return $?
+}
+
+##
+# Cleanup any created files, such as the exclude file.
+##
+backup_cleanup()
+{
+    rm -f ${BACKUP_EXCLUDE_FILE}
+}
+
+##
+# Verify that source and destination exist.
+##
+backup_directory_verify()
+{
+    local src="${1}"
+    local dst="${2}"
+    local IFS=$'|'
+    if  ! backup_is_destination "${dst}"
+    then
+        print_err "Invalid backup destination '${dst}'."
+        return ${EXIT_BACKUP_INVALID_DIRECTORY}
+    fi
+    for d in ${src}
+    do
+        if ! backup_is_source "${d}"
+        then
+            print_err "Invalid source directory/file '${d}'."
+            return ${EXIT_BACKUP_INVALID_DIRECTORY}
+        fi
+    done
+    return 0
+}
+
+##
+# Verify that file exists.
+##
+backup_file_verify()
+{
+    local file="${1}"
+    if ! backup_is_file "${file}"
+    then
+        print_err "Invalid file to backup '${file}'."
+        return ${EXIT_BACKUP_INVALID_FILE}
+    fi
+    return 0
+}
+
+##
+# Verify that everything is prepared for full system backup.
+##
+backup_system_verify()
+{
+    local src="${1}"
+    local dst="${2}"
+    if [ ${UID} -ne 0 ]
+    then
+        print_err "Unable to run full system backup: Must be run as root."
+        return ${EXIT_BACKUP_USER_NOT_ROOT}
+    fi
+    backup_directory_verify "${src}" "${dst}"
+    return $?
+}
+
+
+##
+# Setup the source or exclude file before running rsync.
+##
+backup_rsync_setup_file()
+{
+    local type="${1}"
+    local input="${2}"
+    local file=
+    local IFS=$'|'
+    local i=
+    case "${type}" in
+        source) file="${BACKUP_SOURCE_FILE}" ;;
+        exclude) file="${BACKUP_EXCLUDE_FILE}" ;;
+        *) return ${EXIT_BACKUP_INVALID_FILE_TYPE} ;;
+    esac
+    : > "${file}"
+    for i in ${input}
+    do
+        printf "%s\n" "${i}" >> "${file}"
+    done
+    return 0
+}
+
+##
+# Setup the source file before running rsync.
+##
+backup_rsync_setup_source_file()
+{
+    local src="${1}"
+    backup_rsync_setup_file "source" "${src}"
+    return $?
+}
+
+##
+# Setup the exclude file before running rsync.
+##
+backup_rsync_setup_exclude_file()
+{
+    local exclude="${1}"
+    backup_rsync_setup_file "exclude" "${exclude}"
+    return $?
+}
+
+##
+# Print the amount of time it took to create a full system backup.
+##
+backup_system_print_time()
+{
+    local startsec="${1}"
+    local stopsec="${2}"
+    local startdate=$(date --date="@${startsec}")
+    local stopdate=$(date --date="@${stopsec}")
+    local duration=$[ ${stopsec} - ${startsec} ]
+    local hr=$[ (${duration}/3600) % 24 ]
+    local min=$[ (${duration}/60) % 60 ]
+    local sec=$[ ${duration} % 60 ]
+    local hrmsg=
+    local minmsg=
+    local secmsg="${sec} seconds"
+    if [ ${hr} -ne 0 ]
+    then
+        hrmsg="${hr} hours, "
+        minmsg="${min} minutes, "
+    else
+        if [ ${min} -ne 0 ]
+        then
+            minmsg="${min} minutes, "
+        fi
+    fi
+    echo
+    echo "--- Backup Results ---"
+    printf "%-5s %s\n" "Start" ": ${startdate}"
+    printf "%-5s %s\n" "End"   ": ${stopdate}"
+    printf "%-5s %s\n" "Total" ": ${hrmsg}${minmsg}${secmsg}"
+}
+
+##
+# Move the newly created snapshot to the latest symlink, for a full system
+# backup.
+##
+backup_system_move_latest_snapshot()
+{
+    local root="${1}"
+    local dst="${2}"
+    print_info "Moving latest snapshot to '${dst}'."
+    rm -f "${root}/latest"
+    ln -sv "${dst}" "${root}/latest"
+}
+
+##
+# Fix the log file.
+# 
+# Due to having rsync show the progress of a copy, some lines wil have '\r' in
+# them. Once the log file is generated, however, those '\r' status lines are no
+# longer needed. This will remove those lines.
+##
+backup_system_fix_log()
+{
+    local log="${1}"
+    print_info "Doing some finishing touches."
+    sed -i '/\r/d' "${log}"
+    return $?
+}
+
+##
+# Return the source directories for a full system backup.
+##
+backup_system_get_source()
+{
+    local line=
+    local i=0
+    local IFS=$'\n'
+    local mounts=
+    for line in $(df -h -x tmpfs -x devtmpfs)
+    do
+        i=$[ ${i} + 1 ]
+        if [ ${i} -eq 1 ]
+        then
+            continue
+        fi
+        local IFS=$' \t'
+        local columns=(${line})
+        local pt="${columns[5]}"
+        case "${pt}" in
+            *mnt*|*media*|*srv*) continue ;;
+            *) mounts+="${pt}|" ;;
+        esac
+    done
+    echo "${mounts}"
+    return 0
+}
+
+##
+# Return the destination directory for a full system backup.
+##
+backup_system_get_destination()
+{
+    local dir="${1}"
+    echo "${dir}/$(date +%F)"
+}
+
+##
+# Return the exclusion list with some defaults added to it, for a full system
+# backup.
+##
+backup_system_get_exclude()
+{
+    local exclude="${1}"
+    if [ -z "${exclude}" ]
+    then
+        exclude="/home/*/.thumbnails"
+    else
+        exclude+="|/home/*/.thumbnails"
+    fi
+    exclude+="|/home/*/.cache"
+    exclude+="|/home/*/.mozilla/firefox/*.default/storage"
+    exclude+="|/root/.thumbnails"
+    exclude+="|/root/.cache"
+    exclude+="|/root/.mozilla/firefox/*.default/storage"
+    exclude+="|/swapfile"
+    echo "${exclude}"
+}
+
+##
+# Return the log for a full system backup.
+##
+backup_system_get_log()
+{
+    local dir="${1}"
+    echo "${dir}/Backup_Summary_$(date +%T%z).log"
+}
+
+##
+# Check if input source is a valid directory or file.
+# 
+# The directory must exist and the user must have read and execute permissions.
+##
+backup_is_source()
+{
+    local src="${1}"
+    if [ -d "${src}" -a -r "${src}" -a -x "${src}" ] || [ -f "${src}" -a -r "${src}" ]
+    then
+        return 0
+    else
+        return 1
+    fi
+}
+
+##
+# Check if input destination is a valid directory.
+# 
+# The directory must exist and the user must have read, write, and execute
+# permissions.
+##
+backup_is_destination()
+{
+    local dst="${1}"
+    if [ -d "${dst}" -a -r "${dst}" -a -w "${dst}" -a -x "${dst}" ]
+    then
+        return 0
+    else
+        return 1
+    fi
+}
+
+##
+# Check ig input is a file.
+# 
+# The file must exist and the user must have read permissions.
+##
+backup_is_file()
+{
+    local IFS=$'|'
+    for file in ${@}
+    do
+        if [ ! -f "${file}" -o ! -r "${file}" ]
+        then
+            return 1
+        fi
+    done
+    return 0
+}
+
+##
+# Run script.
+##
+main "${@}"
