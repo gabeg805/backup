@@ -1,7 +1,7 @@
 #!/bin/bash
 # ------------------------------------------------------------------------------
 # 
-# File: back
+# File: backup
 # Author: Gabriel Gonzalez
 # 
 # Brief: A file/directory/system backup program.
@@ -9,15 +9,19 @@
 # ------------------------------------------------------------------------------
 
 ##
-# Source utilities.
+# Project name.
 ##
-. "commandline.sh"
-. "io.sh"
+PROJECT="${0##*/}"
 
 ##
 # Options.
 ##
-VERBOSE=true
+HELP=
+BACKUP=()
+DESTINATION=
+EXCLUDE=()
+FILE=()
+SYSTEM=
 
 ##
 # Files.
@@ -27,10 +31,10 @@ BACKUP_EXCLUDE_FILE="/tmp/${PROJECT}_exclude.txt"
 ##
 # Exit statuses.
 ##
-EXIT_BACKUP_INVALID_DIRECTORY=10
-EXIT_BACKUP_INVALID_FILE=11
-EXIT_BACKUP_INVALID_BACKUP_TYPE=12
-EXIT_BACKUP_INVALID_FILE_TYPE=13
+EXIT_BACKUP_INVALID_DIRECTORY=11
+EXIT_BACKUP_INVALID_FILE=12
+EXIT_BACKUP_INVALID_BACKUP_TYPE=13
+EXIT_BACKUP_INVALID_FILE_TYPE=14
 EXIT_BACKUP_USER_NOT_ROOT=20
 
 ##
@@ -38,39 +42,106 @@ EXIT_BACKUP_USER_NOT_ROOT=20
 ##
 main()
 {
-    cli_options "-h|--help             |Print program usage." \
-                "-b|--backup=src:::    |Backup one or more directories. Must be run with '-d' and, optionally, with '-e'." \
-                "-d|--destination=dest:|Destination path to save backup to." \
-                "-e|--exclude=dir:::   |Directories to exclude from the backup." \
-                "-f|--files=files:::   |Backup one or more files. Appends '.bak' to the name." \
-                "-S|--system           |Full sytem backup. Must be run with '-d' and, optionally, with '-e'." \
-                "-v|--verbose          |Print verbose output."
-    cli_parse "${@}"
+    # Parse options
+    local short="hb:d:e:f:S"
+    local long="help,backup:,destination:,exclude:,file:,system"
+    local args=$(getopt -o "${short}" --long "${long}" --name "${PROJECT}" \
+                        -- "${@}")
+    if [ $? -ne 0 ]
+    then
+        usage
+        exit 1
+    fi
+    eval set -- "${args}"
 
-    local help=$(cli_get "help")
-    local backup=$(cli_get "backup")
-    local destination=$(cli_get "destination")
-    local exclude=$(cli_get "exclude")
-    local files=$(cli_get "files")
-    local system=$(cli_get "system")
+    while true
+    do
+        case "${1}" in
+            -h|--help)
+                usage
+                return 0
+                ;;
+            -b|--backup)
+                shift
+                BACKUP+=("${1}")
+                ;;
+            -d|--destination)
+                shift
+                DESTINATION="${1}"
+                ;;
+            -e|--exclude)
+                shift
+                EXCLUDE+=("${1}")
+                ;;
+            -f|--file)
+                shift
+                FILE+=("${1}")
+                ;;
+            -S|--system)
+                SYSTEM=true
+                ;;
+            *)
+                break
+                ;;
+        esac
+        shift
+    done
 
+    # Run options
     trap backup_cleanup EXIT
-    if [ -n "${help}" ]
+    if [ -n "${BACKUP}" ]
     then
-        cli_usage
-    elif [ -n "${backup}" ]
+        backup_directory "${DESTINATION}" "${BACKUP[@]}"
+    elif [ -n "${FILE}" ]
     then
-        backup_directory "${backup}" "${destination}" "${exclude}"
-    elif [ -n "${files}" ]
+        backup_file "${FILE[@]}"
+    elif [ -n "${SYSTEM}" ]
     then
-        backup_file "${files}"
-    elif [ -n "${system}" ]
-    then
-        backup_system "${destination}" "${exclude}"
+        backup_system "${DESTINATION}"
     else
         :
     fi
-    exit $?
+
+    return $?
+}
+
+##
+# Print program usage.
+##
+usage()
+{
+    echo "Usage: ${PROJECT} [options] [args]"
+    echo 
+    echo "Options:"
+    echo "    -h, --help"
+    echo "        Print program usage."
+    echo 
+    echo "    -b, --backup=<dir>"
+    echo "        Backup a directory. Must be run with '-d' and, optionally,"
+    echo "        with '-e'. Use this option more than once to backup more"
+    echo "        directories."
+    echo 
+    echo "    -d, --destination=<dir>"
+    echo "        Destination path to save backup to."
+    echo 
+    echo "    -e, --exclude=<dir>"
+    echo "        A directory to exclude from the backup. Use this option more"
+    echo "        than once to exclude more directories."
+    echo 
+    echo "    -f, --files=<file>"
+    echo "        Backup a file by appending '.bak' to the name. Use this"
+    echo "        option more than once to backup more files."
+    echo 
+    echo "    -S|--system"
+    echo "        Full sytem backup. Must be run with '-d' and, optionally,"
+    echo "        with '-e'."
+    echo 
+    echo "Arguments:"
+    echo "    <dir>"
+    echo "        A directory."
+    echo 
+    echo "    <file>"
+    echo "        A file or directory."
 }
 
 ##
@@ -78,11 +149,11 @@ main()
 ##
 backup_directory()
 {
-    local src="${1}"
-    local dst="${2}"
-    local exclude="${3}"
-    backup_directory_verify "${src}" "${dst}" || return $?
-    backup_rsync "backup" "${src}" "${dst}" "${exclude}"
+    local dst="${1}"
+    shift
+    local src=("${@}")
+    backup_directory_verify "${dst}" "${src[@]}" || return $?
+    backup_rsync "backup" "${dst}" "${src[@]}"
     return $?
 }
 
@@ -93,9 +164,8 @@ backup_directory()
 ##
 backup_file()
 {
-    local file="${1}"
-    local IFS=$'|'
-    for f in ${file}
+    local f=
+    for f in "${@}"
     do
         backup_file_verify "${f}" || return $?
         cp -anv "${f}" "${f}.bak"
@@ -107,22 +177,20 @@ backup_file()
 ##
 backup_system()
 {
-    local src=$(backup_system_get_source)
+    local src=($(backup_system_get_source))
     local root=$(readlink -e "${1}")
-    local exclude=$(backup_system_get_exclude "${2}")
     local dst=$(backup_system_get_destination "${root}")
     local logfile=$(backup_system_get_log "${dst}")
-    local start=
-    local stop=
-    backup_system_verify "${src}" "${root}" || return $?
+    backup_system_verify "${root}" "${src[@]}" || return $?
+    backup_system_setup_exclude_defaults
 
-    print_info "Running Full System Backup."
-    sleep 2
+    echo ":: Running Full System Backup."
+    sleep 3
     mkdir -p "${dst}"
 
-    start=$(date +%s)
-    backup_rsync "system" "${src}" "${dst}" "${exclude}" | tee -a "${logfile}"
-    stop=$(date +%s)
+    local start=$(date +%s)
+    backup_rsync "system" "${dst}" "${src[@]}" | tee -a "${logfile}"
+    local stop=$(date +%s)
     backup_system_move_latest_snapshot "${root}" "${dst}" | tee -a "${logfile}"
     backup_system_print_time "${start}" "${stop}" | tee -a "${logfile}"
     backup_system_fix_log "${logfile}"
@@ -134,29 +202,26 @@ backup_system()
 backup_rsync()
 {
     local type="${1}"
-    local src="${2}"
-    local dst="${3}"
-    local exclude="${4}"
+    local dst="${2}"
+    shift 2
+    local src=("${@}")
     local link=
 
     case "${type}" in
         backup)
             ;;
-
         system)
-            local latest=$(dirname "${dst}")/latest
-            link="--link-dest=${latest}"
+            link="--link-dest=$(dirname "${dst}")/latest"
             ;;
-
         *)
-            print_err "Unable to run rsync: Invalid backup type '${type}'."
+            echo "${PROJECT}: Unable to run rsync: Invalid backup type '${type}'." 1>&2
             return ${EXIT_BACKUP_INVALID_BACKUP_TYPE}
             ;;
     esac
-    local IFS=$'|'
-    backup_rsync_setup_exclude_file "${exclude}"
-    echo rsync -aEHAXxPhv --exclude-from="${BACKUP_EXCLUDE_FILE}" ${link} ${src} ${dst}
-    rsync -aEHAXxPhv --exclude-from="${BACKUP_EXCLUDE_FILE}" ${link} ${src} ${dst}
+
+    backup_rsync_setup_exclude_file
+    rsync -aEHAXxPhv --exclude-from="${BACKUP_EXCLUDE_FILE}" \
+          ${link} "${src[@]}" "${dst}"
     return $?
 }
 
@@ -165,7 +230,7 @@ backup_rsync()
 ##
 backup_cleanup()
 {
-    rm -f ${BACKUP_EXCLUDE_FILE}
+    rm -f "${BACKUP_EXCLUDE_FILE}"
 }
 
 ##
@@ -173,19 +238,20 @@ backup_cleanup()
 ##
 backup_directory_verify()
 {
-    local src="${1}"
-    local dst="${2}"
-    local IFS=$'|'
+    local dst="${1}"
+    shift
+    local src=("${@}")
+    local d=
     if  ! backup_is_destination "${dst}"
     then
-        print_err "Invalid backup destination '${dst}'."
+        echo "${PROJECT}: Invalid backup destination '${dst}'." 1>&2
         return ${EXIT_BACKUP_INVALID_DIRECTORY}
     fi
-    for d in ${src}
+    for d in "${src[@]}"
     do
         if ! backup_is_source "${d}"
         then
-            print_err "Invalid source directory/file '${d}'."
+            echo "${PROJECT}: Invalid source directory/file '${d}'." 1>&2
             return ${EXIT_BACKUP_INVALID_DIRECTORY}
         fi
     done
@@ -200,7 +266,7 @@ backup_file_verify()
     local file="${1}"
     if ! backup_is_file "${file}"
     then
-        print_err "Invalid file to backup '${file}'."
+        echo "${PROJECT}: Invalid file to backup '${file}'." 1>&2
         return ${EXIT_BACKUP_INVALID_FILE}
     fi
     return 0
@@ -211,49 +277,35 @@ backup_file_verify()
 ##
 backup_system_verify()
 {
-    local src="${1}"
-    local dst="${2}"
+    local dst="${1}"
+    shift
+    local src=("${@}")
     if [ ${UID} -ne 0 ]
     then
-        print_err "Unable to run full system backup: Must be run as root."
+        echo "${PROJECT}: Unable to run full system backup: Must be run as root." 1>&2
         return ${EXIT_BACKUP_USER_NOT_ROOT}
     fi
-    backup_directory_verify "${src}" "${dst}"
+    backup_directory_verify "${dst}" "${src[@]}"
     return $?
 }
 
-
 ##
-# Setup the source or exclude file before running rsync.
+# Setup the default exclude list.
 ##
-backup_rsync_setup_file()
+backup_system_setup_exclude_defaults()
 {
-    local type="${1}"
-    local input="${2}"
-    local file=
-    local IFS=$'|'
-    local i=
-    case "${type}" in
-        source) file="${BACKUP_SOURCE_FILE}" ;;
-        exclude) file="${BACKUP_EXCLUDE_FILE}" ;;
-        *) return ${EXIT_BACKUP_INVALID_FILE_TYPE} ;;
-    esac
-    : > "${file}"
-    for i in ${input}
+    local dirs=("/home/*/.thumbnails" \
+                "/home/*/.cache" \
+                "/home/*/.mozilla/firefox/*.default/storage" \
+                "/root/.thumbnails" \
+                "/root/.cache" \
+                "/root/.mozilla/firefox/*.default/storage" \
+                "/swapfile")
+    local e=
+    for e in "${dirs}"
     do
-        printf "%s\n" "${i}" >> "${file}"
+        EXCLUDE+=("${e}")
     done
-    return 0
-}
-
-##
-# Setup the source file before running rsync.
-##
-backup_rsync_setup_source_file()
-{
-    local src="${1}"
-    backup_rsync_setup_file "source" "${src}"
-    return $?
 }
 
 ##
@@ -261,9 +313,14 @@ backup_rsync_setup_source_file()
 ##
 backup_rsync_setup_exclude_file()
 {
-    local exclude="${1}"
-    backup_rsync_setup_file "exclude" "${exclude}"
-    return $?
+    local file="${BACKUP_EXCLUDE_FILE}"
+    local i=
+    : > "${file}"
+    for i in "${EXCLUDE[@]}"
+    do
+        printf "%s\n" "${i}" >> "${file}"
+    done
+    return 0
 }
 
 ##
@@ -307,7 +364,7 @@ backup_system_move_latest_snapshot()
 {
     local root="${1}"
     local dst="${2}"
-    print_info "Moving latest snapshot to '${dst}'."
+    echo ":: Moving latest snapshot to '${dst}'."
     rm -f "${root}/latest"
     ln -sv "${dst}" "${root}/latest"
 }
@@ -322,7 +379,7 @@ backup_system_move_latest_snapshot()
 backup_system_fix_log()
 {
     local log="${1}"
-    print_info "Doing some finishing touches."
+    echo ":: Doing some finishing touches."
     sed -i '/\r/d' "${log}"
     return $?
 }
@@ -332,10 +389,9 @@ backup_system_fix_log()
 ##
 backup_system_get_source()
 {
+    local IFS=$'\n'
     local line=
     local i=0
-    local IFS=$'\n'
-    local mounts=
     for line in $(df -h -x tmpfs -x devtmpfs)
     do
         i=$[ ${i} + 1 ]
@@ -348,10 +404,9 @@ backup_system_get_source()
         local pt="${columns[5]}"
         case "${pt}" in
             *mnt*|*media*|*srv*) continue ;;
-            *) mounts+="${pt}|" ;;
+            *) echo "${pt}" ;;
         esac
     done
-    echo "${mounts}"
     return 0
 }
 
@@ -362,28 +417,6 @@ backup_system_get_destination()
 {
     local dir="${1}"
     echo "${dir}/$(date +%F)"
-}
-
-##
-# Return the exclusion list with some defaults added to it, for a full system
-# backup.
-##
-backup_system_get_exclude()
-{
-    local exclude="${1}"
-    if [ -z "${exclude}" ]
-    then
-        exclude="/home/*/.thumbnails"
-    else
-        exclude+="|/home/*/.thumbnails"
-    fi
-    exclude+="|/home/*/.cache"
-    exclude+="|/home/*/.mozilla/firefox/*.default/storage"
-    exclude+="|/root/.thumbnails"
-    exclude+="|/root/.cache"
-    exclude+="|/root/.mozilla/firefox/*.default/storage"
-    exclude+="|/swapfile"
-    echo "${exclude}"
 }
 
 ##
