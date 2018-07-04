@@ -31,6 +31,7 @@ BACKUP_EXCLUDE_FILE="/tmp/${PROJECT}_exclude.txt"
 ##
 # Exit statuses.
 ##
+EXIT_BACKUP_NO_OPT=10
 EXIT_BACKUP_INVALID_DIRECTORY=11
 EXIT_BACKUP_INVALID_FILE=12
 EXIT_BACKUP_INVALID_BACKUP_TYPE=13
@@ -42,15 +43,24 @@ EXIT_BACKUP_USER_NOT_ROOT=20
 ##
 main()
 {
-    # Parse options
+	if [ $# -eq 0 ]
+	then
+		usage
+		return 0
+	fi
+
+	# Options
     local short="hb:d:e:f:S"
     local long="help,backup:,destination:,exclude:,file:,system"
-    local args=$(getopt -o "${short}" --long "${long}" --name "${PROJECT}" \
-                        -- "${@}")
+	local args=
+
+    # Parse options
+    args=$(getopt -o "${short}" --long "${long}" --name "${PROJECT}" \
+				-- "${@}")
     if [ $? -ne 0 ]
     then
         usage
-        exit 1
+        return 1
     fi
     eval set -- "${args}"
 
@@ -99,7 +109,8 @@ main()
     then
         backup_system "${DESTINATION}"
     else
-        :
+		usage
+		return ${EXIT_BACKUP_NO_OPT}
     fi
 
     return $?
