@@ -197,7 +197,9 @@ backup_system()
 
     echo ":: Running Full System Backup."
     sleep 3
-    mkdir -p "${dst}"
+    mkdir -pv "${dst}"
+	: > "${logfile}"
+    sleep 3
 
     local start=$(date +%s)
     backup_rsync "system" "${dst}" "${src[@]}" | tee -a "${logfile}"
@@ -436,7 +438,7 @@ backup_system_get_destination()
 backup_system_get_log()
 {
     local dir="${1}"
-    echo "${dir}/Backup_Summary_$(date +%T%z).log"
+    echo "${dir}/Backup_Summary_$(date +%T%z | tr -d ':').log"
 }
 
 ##
